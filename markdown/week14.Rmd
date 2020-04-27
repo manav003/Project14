@@ -41,13 +41,15 @@ dbExecute(con, "USE rnlander_8960")
 
 Here, I am using SQL to collect the data required to answer the question *Do people that use more social media platforms (i.e., a larger count of platforms) have greater acceptance of privacy intrusions (i.e., a higher mean score across the 4-point scale), and do these differences vary by age?* .
 
-To do this, I first inner-joined the *responses* table with the *socialmedia* table using *responses.smu_code* and *socialmedia.code* to collect all the privacy questions' responses as well as social media usage information. Then, I inner-joined this with the *demos* table to be able to collect the ages of participants. 
+To do this, I first inner-joined the *responses* table with the *socialmedia* table using *responses.smu_code* and *socialmedia.code* to collect all the privacy questions' responses as well as social media usage information. Then, I inner-joined this with the *demos* table to be able to collect the ages of participants. (I then ordered by *responses.ident* as I discovered that that is what the tidyverse approach does by default. )
 
 Finally, I saved the resulting table as a data frame in *sql_tbl*.
 
 ```{r}
 
-sql_tbl <- dbGetQuery(con, "SELECT ident, age, facebook, twitter, instagram, youtube, snapchat, other, rec_events, rec_products, rec_friends, rec_policial
+sql_tbl <- dbGetQuery(con, "SELECT ident, age, facebook, twitter, instagram, 
+                    youtube, snapchat, other, rec_events, rec_products,
+                    rec_friends, rec_policial
 
            FROM responses AS r
            INNER JOIN socialmedia AS s
@@ -58,27 +60,6 @@ sql_tbl <- dbGetQuery(con, "SELECT ident, age, facebook, twitter, instagram, you
            
            ORDER BY ident
            ")
-
-
-# gets table containing which social media are used; WITH ident of participant
-#smTable <-
-# dbGetQuery(con, "SELECT ident, facebook, twitter, instagram, youtube, snapchat, other
-#            FROM responses AS r
-#            INNER JOIN socialmedia AS s
-#            ON r.smu_code = s.code")
-
-
-# gets table containing all 4 privacy questions' responses and includes age; WITH participant_num
-#privTable <-
-# dbGetQuery(con, "SELECT participant_num, age, rec_events, rec_products, rec_friends, rec_policial, facebook, twitter, instagram, youtube, snapchat, other
-# 
-#            FROM demos AS d
-#            INNER JOIN responses AS r
-#            ON d.participant_num = r.ident
-# 
-#            WHERE rec_events <> 'NA'
-# 
-#            ")
 ```
 
 Here, I am going to accomplish the same thing as above, but instead first import each table directly and then combine them using *tidyverse*.
@@ -94,15 +75,14 @@ socialmedia <- dbGetQuery(con, "SELECT * FROM socialmedia")
 tidy_tbl <- responses %>% 
   inner_join(socialmedia, by = c("smu_code" = "code")) %>% 
   inner_join(demos, by = c("ident" = "participant_num")) %>% 
-  select(ident, age, facebook, twitter, instagram, youtube, snapchat, other, rec_events, rec_products, rec_friends, rec_policial) #%>% 
-  #filter_at(rec_events == "NA")
-  
+  select(ident, age, facebook, twitter, instagram, youtube, snapchat, other, rec_events,
+         rec_products, rec_friends, rec_policial)
 
 ```
 
-Now, *sql_tbl* and *tidy_tbl* are essentially identical. I clean on *tidy_tbl* to prepare for the necessary analysis.
+Now, *sql_tbl* and *tidy_tbl* are essentially identical. I will now clean on *tidy_tbl* to prepare for the necessary analysis.
 
-```{r}
+```{r warning=FALSE}
 
 clean <-  tidy_tbl %>% 
   select(-ident) %>% 
@@ -112,51 +92,67 @@ clean <-  tidy_tbl %>%
                 replacement = NA_character_))) %>% 
   mutate_at(vars(matches("rec")), factor) %>% 
   mutate_at(vars(matches("rec")), as.numeric) %>% 
-  mutate(meanPrivacyScore = rowMeans(select(., c(rec_events, rec_products, rec_friends, rec_policial)))) %>% 
+  mutate(meanPrivacyScore = rowMeans(select(., c(rec_events, rec_products, rec_friends,
+                                                 rec_policial)))) %>% 
   drop_na(meanPrivacyScore) %>% 
   mutate_all(funs(
     str_replace(.,
               pattern = "Not selected",
               replacement = NA_character_))) %>% 
-  mutate(smCount = rowSums(!is.na(select(., c(facebook, twitter, instagram, youtube, snapchat, other))))) %>% 
+  mutate(smCount = rowSums(!is.na(select(., c(facebook, twitter, instagram, youtube,
+                                              snapchat, other))))) %>% 
   mutate(age = as.factor(age)) %>% 
   mutate(meanPrivacyScore = as.numeric(meanPrivacyScore)) %>% 
   select(meanPrivacyScore, age, smCount)
 
-
-# data %>% 
-#     rowwise() %>% 
-#     mutate(c=mean(c(a,b)))
-    
-#clean <- import[!(rowSums(is.na(import)) == 10),]
-
-#c(rec_events, rec_products, rec_friends, rec_policial)
-
 ```
-
+Now, in my *clean* data, I just have the necessary variables to answer the research question. (For social media, I am including the response of 'Other' to mean that the participant is using a (1) social media that has not been listed.)
 
 ## Analysis
+
+I am now running an ordinary least squares regression on X = Number of Social Media Platforms Used and Y = Mean Privacy Score.
+
 ```{r}
 model <- lm(meanPrivacyScore ~ smCount, data = clean)
 summary(model)
 ```
 
+From the above output, we can see that the slope between our X and Y variables is 0.123377 and that it is highly significant as can be seen by the miniscule p-value. In other words, I would say that there is a strong linear relationship between the number of social media platforms used and mean privacy scores.
 
 ## Visualization
+
+**Plot 1**
 ```{r}
-ggplot(clean, aes(x = smCount, y = meanPrivacyScore)) + #, col = age)) +
+ggplot(clean, aes(x = smCount, y = meanPrivacyScore)) + 
   geom_jitter() + 
   geom_smooth(method = "lm", se = FALSE) +
   labs(x = "Number of Social Media Platforms Used", y = "Mean Privacy Score")
+```
 
+The above plot displays a basic scatterplot of number of social media platforms used vs. mean privacy scores, along with lm model regression line. It seems like a majority of the data lies around 4 social media platforms used or less, and around a mean privacy score of 3 and below. 
+
+
+**Plot 2**
+```{r}
 ggplot(clean, aes(x = smCount, y = meanPrivacyScore, col = age)) +
   geom_jitter() + 
   geom_smooth(method = "lm", se = FALSE) + 
   labs(x = "Number of Social Media Platforms Used", y = "Mean Privacy Score")
+```
 
+From the above plot, we can see where the data lies for each category of ages with their corresponding colors and linear regression lines. It seems like the age groups are pretty similar in terms of the regression line slopes (ignoring the NA age group). So I would say that age is not a strong influencing factor here.
+
+
+**Plot 3**
+```{r}
 ggplot(clean, aes(x = as.factor(smCount), y = meanPrivacyScore)) +
   geom_boxplot() +
   labs(x = "Number of Social Media Platforms Used", y = "Mean Privacy Score")
-
 ```
+
+Last but not least, the above plot displays a boxplot visualization portraying how mean privacy score changes as the number of social media platforms used increases (similar to what the regression line slope in Plot 1 shows). Here, I can see that the greatest increase in mean privacy scores occurs when the number of social media platforms used increases from 1 to 2 and to 3, but tapers off with the use of more than three social media platforms.
+
+
+
+
 
