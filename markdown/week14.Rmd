@@ -1,0 +1,162 @@
+---
+title: "week14"
+author: "Mathi Manavalan"
+date: "4/24/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+```{r message=FALSE, warning=FALSE}
+library(RMariaDB)
+library(tidyverse)
+```
+
+
+## Data Import and Cleaning
+
+In this first section, I am creating a connection to the database and exploring what is available to me (commented out, as it is not necessary past exploration).
+```{r include=FALSE}
+con <- dbConnect(MariaDB(),
+                 user = "rnlander_8960r",
+                 password = "rTCo.4vQ2vc-",
+                 host = "tntlab.org")
+
+#dbExecute(con, "SHOW DATABASES")
+
+dbExecute(con, "USE rnlander_8960")
+
+# dbGetQuery(con, "SHOW TABLES")
+# 
+# dbGetQuery(con, "SELECT * FROM demos")
+# 
+# dbGetQuery(con, "SELECT * FROM responses")
+# 
+# dbGetQuery(con, "SELECT * FROM socialmedia")
+
+```
+
+Here, I am using SQL to collect the data required to answer the question *Do people that use more social media platforms (i.e., a larger count of platforms) have greater acceptance of privacy intrusions (i.e., a higher mean score across the 4-point scale), and do these differences vary by age?* .
+
+To do this, I first inner-joined the *responses* table with the *socialmedia* table using *responses.smu_code* and *socialmedia.code* to collect all the privacy questions' responses as well as social media usage information. Then, I inner-joined this with the *demos* table to be able to collect the ages of participants. 
+
+Finally, I saved the resulting table as a data frame in *sql_tbl*.
+
+```{r}
+
+sql_tbl <- dbGetQuery(con, "SELECT ident, age, facebook, twitter, instagram, youtube, snapchat, other, rec_events, rec_products, rec_friends, rec_policial
+
+           FROM responses AS r
+           INNER JOIN socialmedia AS s
+           ON r.smu_code = s.code
+           
+           INNER JOIN demos AS d
+           ON r.ident = d.participant_num
+           
+           ORDER BY ident
+           ")
+
+
+# gets table containing which social media are used; WITH ident of participant
+#smTable <-
+# dbGetQuery(con, "SELECT ident, facebook, twitter, instagram, youtube, snapchat, other
+#            FROM responses AS r
+#            INNER JOIN socialmedia AS s
+#            ON r.smu_code = s.code")
+
+
+# gets table containing all 4 privacy questions' responses and includes age; WITH participant_num
+#privTable <-
+# dbGetQuery(con, "SELECT participant_num, age, rec_events, rec_products, rec_friends, rec_policial, facebook, twitter, instagram, youtube, snapchat, other
+# 
+#            FROM demos AS d
+#            INNER JOIN responses AS r
+#            ON d.participant_num = r.ident
+# 
+#            WHERE rec_events <> 'NA'
+# 
+#            ")
+```
+
+Here, I am going to accomplish the same thing as above, but instead first import each table directly and then combine them using *tidyverse*.
+
+```{r}
+demos <- dbGetQuery(con, "SELECT * FROM demos")
+
+responses <- dbGetQuery(con, "SELECT * FROM responses")
+
+socialmedia <- dbGetQuery(con, "SELECT * FROM socialmedia")
+
+
+tidy_tbl <- responses %>% 
+  inner_join(socialmedia, by = c("smu_code" = "code")) %>% 
+  inner_join(demos, by = c("ident" = "participant_num")) %>% 
+  select(ident, age, facebook, twitter, instagram, youtube, snapchat, other, rec_events, rec_products, rec_friends, rec_policial) #%>% 
+  #filter_at(rec_events == "NA")
+  
+
+```
+
+Now, *sql_tbl* and *tidy_tbl* are essentially identical. I clean on *tidy_tbl* to prepare for the necessary analysis.
+
+```{r}
+
+clean <-  tidy_tbl %>% 
+  select(-ident) %>% 
+  mutate_all(funs(
+    str_replace(.,
+                pattern = "NA|Refused", 
+                replacement = NA_character_))) %>% 
+  mutate_at(vars(matches("rec")), factor) %>% 
+  mutate_at(vars(matches("rec")), as.numeric) %>% 
+  mutate(meanPrivacyScore = rowMeans(select(., c(rec_events, rec_products, rec_friends, rec_policial)))) %>% 
+  drop_na(meanPrivacyScore) %>% 
+  mutate_all(funs(
+    str_replace(.,
+              pattern = "Not selected",
+              replacement = NA_character_))) %>% 
+  mutate(smCount = rowSums(!is.na(select(., c(facebook, twitter, instagram, youtube, snapchat, other))))) %>% 
+  mutate(age = as.factor(age)) %>% 
+  mutate(meanPrivacyScore = as.numeric(meanPrivacyScore)) %>% 
+  select(meanPrivacyScore, age, smCount)
+
+
+# data %>% 
+#     rowwise() %>% 
+#     mutate(c=mean(c(a,b)))
+    
+#clean <- import[!(rowSums(is.na(import)) == 10),]
+
+#c(rec_events, rec_products, rec_friends, rec_policial)
+
+```
+
+
+## Analysis
+```{r}
+model <- lm(meanPrivacyScore ~ smCount, data = clean)
+summary(model)
+```
+
+
+## Visualization
+```{r}
+ggplot(clean, aes(x = smCount, y = meanPrivacyScore)) + #, col = age)) +
+  geom_jitter() + 
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Number of Social Media Platforms Used", y = "Mean Privacy Score")
+
+ggplot(clean, aes(x = smCount, y = meanPrivacyScore, col = age)) +
+  geom_jitter() + 
+  geom_smooth(method = "lm", se = FALSE) + 
+  labs(x = "Number of Social Media Platforms Used", y = "Mean Privacy Score")
+
+ggplot(clean, aes(x = as.factor(smCount), y = meanPrivacyScore)) +
+  geom_boxplot() +
+  labs(x = "Number of Social Media Platforms Used", y = "Mean Privacy Score")
+
+```
+
